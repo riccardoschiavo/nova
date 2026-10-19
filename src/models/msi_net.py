@@ -20,7 +20,7 @@ def _check_deps():
             "MSI-Net richiede: pip install tensorflow tensorflow_hub"
         )
 
-# ritorna il modello caricato in memoria, se non è già stato caricato lo carica
+# Return the model loaded in memory; load it if it has not been loaded yet.
 def _load_model():
     global _model
     if _model is None:
@@ -33,7 +33,7 @@ def _load_model():
         ).signatures["serving_default"]
     return _model
 
-# ridondante con _normalize in msi_net.py, ma lo lascio per compatibilità con il resto del codice
+# Redundant with _normalize in msi_net.py, but kept for compatibility with the rest of the code.
 def _normalize(saliency_map):
     minimum, maximum = saliency_map.min(), saliency_map.max()
     if maximum - minimum > 0:
@@ -45,21 +45,21 @@ def _normalize(saliency_map):
 
 def msinet_saliency(image_bgr):
     _check_deps()
-    model = _load_model() #carico il modello 
+    model = _load_model() # Load the model.
 
-    h, w = image_bgr.shape[:2] # salvo le dimensioni dell'immagine originale
+    h, w = image_bgr.shape[:2] # Save the original image dimensions.
 
-    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB) # converto l'immagine da BGR a RGB per OpenCV
+    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB) # Convert the image from BGR to RGB for OpenCV.
 
     image_resized = cv2.resize(image_rgb, (_INPUT_W, _INPUT_H)) 
 
     tensor = image_resized.astype(np.float32) / 255.0
     tensor = tensor[np.newaxis, ...]
 
-    # importo tensorflow e converto il tensore in un tensore di tensorflow
+    # Import TensorFlow and convert the tensor to a TensorFlow tensor.
     import tensorflow as tf
     tensor = tf.constant(tensor)
-    outputs = model(tensor) # eseguo 
+    outputs = model(tensor) # Run the model.
 
     if isinstance(outputs, dict):
         output = list(outputs.values())[0].numpy()
