@@ -1,12 +1,19 @@
-from xml.parsers.expat import model
+
+import os
 
 import numpy as np
 import cv2
-from torch import device
+
+# weights produced by finetune_deepgaze.py (saved in the project root)
+FINETUNED_WEIGHTS = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "deepgaze_finetuned.pt"
+)
 
 # model is not loaded until it is needed (lazy loading)
 _model = None
 _current_device = None # current device
+_finetuned_model = None
+_finetuned_device = None
 
 # check whether the dependencies are available
 def is_available() -> bool:
@@ -41,6 +48,30 @@ def _load_model(device):
         
     return _model
 
+# load DeepGaze IIE with the fine-tuned weights and return it
+def _load_finetuned_model(device):
+    global _finetuned_model, _finetuned_device
+    if _finetuned_model is None or _finetuned_device != device:
+        _check_deps()
+        import torch
+        import deepgaze_pytorch
+
+        if not os.path.exists(FINETUNED_WEIGHTS):
+            raise FileNotFoundError(
+                f"Fine-tuned weights not found: '{FINETUNED_WEIGHTS}'. "
+                "Run finetune_deepgaze.py first."
+            )
+
+        model = deepgaze_pytorch.DeepGazeIIE(pretrained=True)
+        state_dict = torch.load(FINETUNED_WEIGHTS, map_location="cpu")
+        model.load_state_dict(state_dict)
+        model = model.to(device)
+        model.eval()
+        _finetuned_model = model
+        _finetuned_device = device
+
+    return _finetuned_model
+
 # build a uniform center bias so that no image region is favored
 def build_uniform_centerbias(height, width):
     n = height * width
@@ -56,12 +87,15 @@ def _normalize(saliency_map):
     return saliency_map.astype(np.float32)
 
 def deepgaze_saliency(image_bgr, device="cpu"):
+    return _predict(_load_model(device), image_bgr, device)
 
-    _check_deps()
+def deepgaze_finetuned_saliency(image_bgr, device="cpu"):
+    return _predict(_load_finetuned_model(device), image_bgr, device)
+
+# shared inference: same preprocessing and normalization for both models
+def _predict(model, image_bgr, device):
     import torch
 
-    # load model
-    model = _load_model(device)
     h, w = image_bgr.shape[:2] # image array    
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)# BGR -> RGB
 
@@ -87,4 +121,51 @@ def deepgaze_saliency(image_bgr, device="cpu"):
     saliency = density.cpu().numpy()
     saliency = _normalize(saliency)
 
+    return saliency
+
+    _model_finetuned = None
+_current_device_finetuned = None
+
+# load the tuned model
+def _load_model_finetuned(device, weights_path="deepgaze_finetuned.pt"):
+    """Carica il modello base e ci sovrascrive i pesi fine-tuned (una sola volta)."""
+    global _model_finetuned, _current_device_finetuned
+    if _model_finetuned is None or _current_device_finetuned != device:
+        _check_deps()
+        import torch
+        import deepgaze_pytorch
+
+        _current_device_finetuned = device
+        model = deepgaze_pytorch.DeepGazeIIE(pretrained=True).to(device)
+        state_dict = torch.load(weights_path, map_location=device)
+        model.load_state_dict(state_dict)
+        model.eval()
+        _model_finetuned = model
+    return _model_finetuned
+
+# fine-tuned DeepGaze IIE model
+def deepgaze_finetuned_saliency(image_bgr, device="cpu"):
+    _check_deps()
+    import torch
+
+    model = _load_model_finetuned(device)
+
+    h, w = image_bgr.shape[:2]
+    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    image_tensor = torch.tensor(
+        image_rgb.transpose(2, 0, 1)[np.newaxis, ...].astype(np.float32),
+        device=device,
+    )
+
+    centerbias_np = build_uniform_centerbias(h, w)
+    centerbias_tensor = torch.tensor(centerbias_np[np.newaxis, ...], device=device)
+
+    with torch.no_grad():
+        log_density = model(image_tensor, centerbias_tensor)
+
+    log_density = log_density.squeeze()
+    density = torch.exp(log_density - log_density.max())
+
+    saliency = density.cpu().numpy()
+    saliency = _normalize(saliency)
     return saliency

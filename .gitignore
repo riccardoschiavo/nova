@@ -1,3 +1,7 @@
 venv/
 __pycache__/
 *.pyc
+.cache/
+# model weights (not stored in the repository)
+*.pt
+predicting-human-gaze-beyond-pixels/

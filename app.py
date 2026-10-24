@@ -2,6 +2,7 @@
 
 Run with:  python app.py   (then open http://127.0.0.1:7860)
 """
+import hashlib
 import importlib
 import importlib.util
 import os
@@ -30,6 +31,9 @@ DEEP_SPECS = {
     "DeepGaze IIE": ("src.models.deepgaze", "deepgaze_saliency",
                      ("torch", "deepgaze_pytorch"),
                      "pip install torch git+https://github.com/matthias-k/DeepGaze.git"),
+    "DeepGaze IIE (fine-tuned)": ("src.models.deepgaze", "deepgaze_finetuned_saliency",
+                                  ("torch", "deepgaze_pytorch"),
+                                  "pip install torch git+https://github.com/matthias-k/DeepGaze.git"),
 }
 DEEP_NAMES = list(DEEP_SPECS)
 
@@ -64,7 +68,11 @@ def to_overlay(image_bgr, saliency, alpha):
     return cv2.addWeighted(rgb, 1 - alpha, to_heatmap(saliency), alpha, 0)
 
 
-_deep_workers = {}
+# Deep models run one at a time in a short-lived child process: the process exits
+# after each map, so TensorFlow (MSI-Net) and PyTorch (DeepGaze) are never in RAM
+# together. Maps are cached on disk so each (model, image) pair is computed only once.
+CACHE_DIR = Path(__file__).parent / ".cache" / "saliency"
+_deep_pool = None
 
 
 def _deep_worker(module, function, image):
@@ -72,21 +80,37 @@ def _deep_worker(module, function, image):
     return getattr(importlib.import_module(module), function)(image)
 
 
-def _deep_executor(name):
-    if name not in _deep_workers:
-        _deep_workers[name] = ProcessPoolExecutor(
-            max_workers=1, mp_context=multiprocessing.get_context("spawn"))
-    return _deep_workers[name]
+def _deep_executor():
+    global _deep_pool
+    if _deep_pool is None:
+        _deep_pool = ProcessPoolExecutor(
+            max_workers=1, mp_context=multiprocessing.get_context("spawn"),
+            max_tasks_per_child=1)
+    return _deep_pool
+
+
+def _cache_file(name, path):
+    digest = hashlib.sha1(Path(path).read_bytes()).hexdigest()[:16]
+    slug = "".join(c for c in name.lower() if c.isalnum())
+    return CACHE_DIR / f"{slug}_{digest}_{MAX_SIDE}.npy"
 
 
 @lru_cache(maxsize=64)
 def deep_saliency(name, path):
+    global _deep_pool
+    cache_file = _cache_file(name, path)
+    if cache_file.exists():
+        return np.load(cache_file)
     module, function = DEEP_SPECS[name][:2]
     try:
-        return _deep_executor(name).submit(_deep_worker, module, function, load_bgr(path)).result()
+        saliency = _deep_executor().submit(_deep_worker, module, function, load_bgr(path)).result()
     except BrokenProcessPool:
-        _deep_workers.pop(name).shutdown(wait=False)
-        raise RuntimeError(f"il processo di {name} è terminato in modo anomalo")
+        _deep_pool.shutdown(wait=False)
+        _deep_pool = None
+        raise RuntimeError(f"il processo di {name} è terminato in modo anomalo (memoria esaurita?)")
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    np.save(cache_file, saliency)
+    return saliency
 
 
 def make_renderer(image, alpha, view):
@@ -196,11 +220,12 @@ with gr.Blocks(title="Nova – Saliency models") as demo:
             with gr.Row():
                 out_msinet = gr.Image(label="MSI-Net", interactive=False)
                 out_deepgaze = gr.Image(label="DeepGaze IIE", interactive=False)
+                out_deepgaze_ft = gr.Image(label="DeepGaze IIE (fine-tuned)", interactive=False)
 
     base_inputs = [selected_path, sigma_frac, sr_sigma, sr_size, alpha, view]
     base_outputs = [out_original, out_center, out_itti, out_sr, info]
     deep_inputs = [selected_path, alpha, view, deep_selected]
-    deep_outputs = [out_msinet, out_deepgaze, deep_info]
+    deep_outputs = [out_msinet, out_deepgaze, out_deepgaze_ft, deep_info]
 
     def on_select(evt: gr.SelectData):
         return str(IMAGE_PATHS[evt.index])
