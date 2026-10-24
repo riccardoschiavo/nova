@@ -471,15 +471,12 @@ def run_osie_preview(osie_dir, index, model_name, alpha):
     return gt_view, to_overlay(image, saliency, alpha), info
 
 
-FINETUNE_SCRIPTS = {
-    # model -> (script, default batch size, default unfreeze pattern)
-    "DeepGaze IIE": ("finetune_deepgaze.py", 4, "fixation_selection_networks"),
-    "MSI-Net": ("finetune_msinet.py", 8, ""),
-}
+# only DeepGaze IIE can be fine-tuned: the MSI-Net SavedModel exposes its weights as frozen
+FINETUNE_SCRIPT = ROOT / "finetune_deepgaze.py"
 _train_proc = None
 
 
-def run_finetune(model, osie_dir, max_images, epochs, batch_size, learning_rate, pattern, inspect_only):
+def run_finetune(osie_dir, max_images, epochs, batch_size, learning_rate, pattern, inspect_only):
     global _train_proc
     if _train_proc is not None and _train_proc.poll() is None:
         yield "Un fine-tuning è già in corso."
@@ -492,14 +489,14 @@ def run_finetune(model, osie_dir, max_images, epochs, batch_size, learning_rate,
         yield "Indica un unfreeze pattern (usa «Solo ispezione» per vedere i nomi dei parametri)."
         return
 
-    cmd = [sys.executable, "-u", str(ROOT / FINETUNE_SCRIPTS[model][0]), "--osie", str(osie_dir),
+    cmd = [sys.executable, "-u", str(FINETUNE_SCRIPT), "--osie", str(osie_dir),
            "--max-images", str(int(max_images)), "--epochs", str(int(epochs)),
            "--batch-size", str(int(batch_size)), "--learning-rate", str(learning_rate)]
     if pattern:
         cmd += ["--unfreeze-pattern", pattern]
     if inspect_only:
         cmd.append("--inspect-only")
-    env = dict(os.environ, CUDA_VISIBLE_DEVICES="", TF_CPP_MIN_LOG_LEVEL="2")
+    env = dict(os.environ, CUDA_VISIBLE_DEVICES="")
 
     log = "$ python " + shlex.join(cmd[2:]) + "\n\n"
     yield log
@@ -515,7 +512,7 @@ def run_finetune(model, osie_dir, max_images, epochs, batch_size, learning_rate,
         if _train_proc.poll() is None:
             _train_proc.terminate()
     log += f"\n[processo terminato con codice {code}]"
-    if code == 0 and model == "DeepGaze IIE" and not inspect_only:
+    if code == 0 and not inspect_only:
         log += "\nI nuovi pesi sono usati subito da «DeepGaze IIE (fine-tuned)» (la cache viene rigenerata)."
     yield log
 
@@ -585,7 +582,8 @@ with gr.Blocks(title="NOVA") as demo:
                 rank_table = gr.Dataframe(label="Oggetti", interactive=False, scale=2)
 
         with gr.Tab("3 · Raccolta click"):
-            collect.build_interface(str(IMG_DIR), str(CLICKS_PATH)).render()
+            # a Blocks created inside another one is rendered into it automatically
+            collect.build_interface(str(IMG_DIR), str(CLICKS_PATH))
 
         with gr.Tab("4 · Valutazione"):
             gr.Markdown(
@@ -619,11 +617,10 @@ with gr.Blocks(title="NOVA") as demo:
                     osie_gt = gr.Image(label="Fissazioni + heatmap", interactive=False)
                     osie_pred = gr.Image(label="Mappa del modello", interactive=False)
 
-            with gr.Accordion("Fine-tuning su OSIE", open=True):
-                gr.Markdown("Lancia `finetune_deepgaze.py` o `finetune_msinet.py` in un processo separato. "
-                            "Con i default DeepGaze IIE richiede circa 20 minuti su CPU.")
+            with gr.Accordion("Fine-tuning di DeepGaze IIE su OSIE", open=True):
+                gr.Markdown("Lancia `finetune_deepgaze.py` in un processo separato; con i default richiede "
+                            "circa 20 minuti su CPU. MSI-Net non è addestrabile: i suoi pesi sono congelati.")
                 with gr.Row():
-                    ft_model = gr.Radio(list(FINETUNE_SCRIPTS), value="DeepGaze IIE", label="Modello")
                     ft_pattern = gr.Textbox("fixation_selection_networks", label="Unfreeze pattern")
                     ft_inspect = gr.Checkbox(False, label="Solo ispezione (elenca i parametri)")
                 with gr.Row():
@@ -670,10 +667,9 @@ with gr.Blocks(title="NOVA") as demo:
     osie_outputs = [osie_gt, osie_pred, osie_info]
     for trigger in (osie_btn.click, osie_index.submit, osie_model.change):
         trigger(run_osie_preview, osie_inputs, osie_outputs)
-    ft_model.change(lambda m: (FINETUNE_SCRIPTS[m][1], FINETUNE_SCRIPTS[m][2]), ft_model, [ft_batch, ft_pattern])
     ft_event = ft_start.click(
         run_finetune,
-        [ft_model, osie_dir, ft_max_images, ft_epochs, ft_batch, ft_lr, ft_pattern, ft_inspect], ft_log)
+        [osie_dir, ft_max_images, ft_epochs, ft_batch, ft_lr, ft_pattern, ft_inspect], ft_log)
     ft_stop.click(stop_finetune, None, None, cancels=[ft_event])
 
 
