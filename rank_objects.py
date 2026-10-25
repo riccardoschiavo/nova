@@ -113,33 +113,33 @@ def evaluate_ranking(images_dir, clicks_path):
         path = os.path.join(images_dir, name)
         image_bgr = cv2.imread(path)
         if image_bgr is None:
-            print(f"  ATTENZIONE: immagine non trovata: {name}, saltata.")
+            print(f"  WARNING: image not found: {name}, skipped.")
             continue
 
         # at least 2 objects are needed to talk about a ranking
         boxes = detect_objects(image_bgr)
         if len(boxes) < 2:
-            print(f"  {name}: meno di 2 oggetti rilevati, saltata dal confronto ranking.")
+            print(f"  {name}: fewer than 2 objects detected, skipped from the ranking comparison.")
             continue
 
         # and at least 2 of them must have been clicked
         gt_ranks = ground_truth_rank(boxes, clicks)
         n_clicked = sum(r is not None for r in gt_ranks)
         if n_clicked < 2:
-            print(f"  {name}: meno di 2 box cliccate, saltata dal confronto ranking.")
+            print(f"  {name}: fewer than 2 clicked boxes, skipped from the ranking comparison.")
             continue
 
         for model_name in AVAILABLE_MODELS:
             try:
                 saliency = compute_saliency_at_full_resolution(model_name, image_bgr)
             except Exception as error:
-                print(f"  {model_name} fallito su {name}: {error}") # a failing model does not block the others
+                print(f"  {model_name} failed on {name}: {error}") # a failing model does not block the others
                 continue
             scores = [score_box(saliency, b["box"]) for b in boxes] # score of each box according to the model
             rho, tau = compare_rankings(scores, gt_ranks)
             per_model_scores[model_name].append((rho, tau))
 
-        print(f"  {name}: {len(boxes)} oggetti rilevati, ranking confrontato su {n_clicked} box cliccate")
+        print(f"  {name}: {len(boxes)} objects detected, ranking compared on {n_clicked} clicked boxes")
 
     return per_model_scores
 
@@ -165,18 +165,18 @@ def summarize(per_model_scores):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Valuta il ranking oggetti guidato dalla saliency, confrontato con l'ordine dei click."
+        description="Evaluate the saliency-driven object ranking against the click order."
     )
     parser.add_argument("--images", default="img") # folder with the images
     parser.add_argument("--clicks", default="clicks.json") # file with the clicks saved by collect.py
     args = parser.parse_args()
 
-    print(f"Valutazione ranking su '{args.images}' con ground truth da '{args.clicks}'\n")
+    print(f"Ranking evaluation on '{args.images}' with ground truth from '{args.clicks}'\n")
     per_model = evaluate_ranking(args.images, args.clicks)
     summary = summarize(per_model)
 
     # final table: one row per model with the number of images and the mean of the two correlations
-    header = f"\n{'Modello':<28}{'N img':>8}{'Spearman':>12}{'Kendall':>12}"
+    header = f"\n{'Model':<28}{'N img':>8}{'Spearman':>12}{'Kendall':>12}"
     print(header)
     print("-" * len(header.strip()))
     for e in summary:

@@ -17,7 +17,7 @@ def is_available() -> bool:
 def _check_deps():
     if not is_available():
         raise ImportError(
-            "MSI-Net richiede: pip install tensorflow tensorflow_hub"
+            "MSI-Net needs: pip install tensorflow tensorflow_hub"
         )
 
 # Return the model loaded in memory; load it if it has not been loaded yet.

@@ -1,9 +1,9 @@
-# fine-tuning dell'ultimo blocco di DeepGaze IIE sulle fissazioni di OSIE
-# uso in due passi:
-#   1) python finetune_deepgaze.py --osie <cartella OSIE> --inspect-only
-#      stampa i nomi dei parametri per scegliere quali allenare
-#   2) python finetune_deepgaze.py --osie <cartella OSIE> --unfreeze-pattern "<pattern>"
-#      allena solo i parametri il cui nome contiene il pattern
+# fine-tuning of the last block of DeepGaze IIE on the OSIE fixations
+# two-step usage:
+#   1) python finetune_deepgaze.py --osie <OSIE folder> --inspect-only
+#      prints the parameter names, to choose which ones to train
+#   2) python finetune_deepgaze.py --osie <OSIE folder> --unfreeze-pattern "<pattern>"
+#      trains only the parameters whose name contains the pattern
 
 import argparse
 import os
@@ -12,27 +12,27 @@ import sys
 import numpy as np
 import cv2
 
-# aggiunge la cartella dello script al path per importare osie_ground_truth
+# adds the script folder to the path to import osie_ground_truth
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from osie_ground_truth import load_fixations, points_to_heatmap
 
 
-TARGET_HEIGHT, TARGET_WIDTH = 240, 320 # risoluzione fissa usata per il training
+TARGET_HEIGHT, TARGET_WIDTH = 240, 320 # fixed resolution used for training
 
 
-# costruisce le coppie (immagine, heatmap) da OSIE nel formato che vuole PyTorch
+# builds the (image, heatmap) pairs from OSIE in the format PyTorch expects
 def build_dataset(osie_dir, max_images=None):
-    mat_path = os.path.join(osie_dir, "data", "eye", "fixations.mat") # fissazioni degli osservatori
-    stimuli_dir = os.path.join(osie_dir, "data", "stimuli") # immagini
+    mat_path = os.path.join(osie_dir, "data", "eye", "fixations.mat") # observers' fixations
+    stimuli_dir = os.path.join(osie_dir, "data", "stimuli") # images
 
-    # punti di fissazione raggruppati per nome dell'immagine
+    # fixation points grouped by image name
     fixations = load_fixations(mat_path)
     names = list(fixations.keys())
     if max_images is not None:
-        names = names[:max_images] # usa solo le prime max_images immagini
+        names = names[:max_images] # uses only the first max_images images
 
     pairs = []
-    skipped = 0 # immagini presenti nel .mat ma non trovate su disco
+    skipped = 0 # images listed in the .mat but not found on disk
     for name in names:
         path = os.path.join(stimuli_dir, name)
         image_bgr = cv2.imread(path)
@@ -42,8 +42,8 @@ def build_dataset(osie_dir, max_images=None):
 
         original_h, original_w = image_bgr.shape[:2]
 
-        # heatmap creata alla risoluzione originale (le coordinate delle fissazioni
-        # sono in quel sistema) e solo dopo ridimensionata, così il sigma della gaussiana è corretto
+        # heatmap built at the original resolution (the fixation coordinates are in
+        # that system) and only then resized, so the gaussian sigma is correct
         heatmap = points_to_heatmap(fixations[name], (original_h, original_w))
         heatmap = cv2.resize(heatmap, (TARGET_WIDTH, TARGET_HEIGHT),
                              interpolation=cv2.INTER_AREA)
@@ -51,175 +51,175 @@ def build_dataset(osie_dir, max_images=None):
         image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB) # BGR -> RGB
         image_resized = cv2.resize(image_rgb, (TARGET_WIDTH, TARGET_HEIGHT),
                                    interpolation=cv2.INTER_AREA)
-        image_chw = image_resized.transpose(2, 0, 1).astype(np.float32) # HWC -> CHW, PyTorch vuole i canali per primi
+        image_chw = image_resized.transpose(2, 0, 1).astype(np.float32) # HWC -> CHW, PyTorch wants channels first
 
         pairs.append((image_chw, heatmap.astype(np.float32)))
 
     if skipped:
-        print(f"  ATTENZIONE: {skipped} immagini elencate in fixations.mat "
-              f"non trovate in {stimuli_dir}, saltate.")
+        print(f"  WARNING: {skipped} images listed in fixations.mat "
+              f"not found in {stimuli_dir}, skipped.")
 
     return pairs
 
 
-# crea un center bias uniforme per non dare vantaggio a nessuna regione dell'immagine,
-# lo stesso usato in deepgaze.py della fase 2
+# builds a uniform center bias so that no region of the image gets an advantage,
+# the same one used in deepgaze.py
 def build_centerbias(height, width):
     import torch
     centerbias = np.zeros((height, width), dtype=np.float64)
     log_sum = np.log(np.exp(centerbias).sum())
-    centerbias = centerbias - log_sum # normalizza: matrice di valori log(1/n)
+    centerbias = centerbias - log_sum # normalizes: matrix of log(1/n) values
     return torch.tensor(centerbias, dtype=torch.float32)
 
 
-# carica DeepGaze IIE pre-addestrato, in PyTorch è già un modello allenabile
+# loads the pretrained DeepGaze IIE, in PyTorch it is already a trainable model
 def load_trainable_model(device="cpu"):
     import deepgaze_pytorch
     model = deepgaze_pytorch.DeepGazeIIE(pretrained=True).to(device)
     return model
 
 
-# stampa nome e forma di tutti i parametri, serve per scegliere --unfreeze-pattern
+# prints name and shape of every parameter, used to choose --unfreeze-pattern
 def inspect_parameters(model):
     named = list(model.named_parameters())
-    print(f"\nParametri allenabili totali: {len(named)}\n")
+    print(f"\nTotal trainable parameters: {len(named)}\n")
     for name, p in named:
         print(f"  {name:<70} shape={tuple(p.shape)}")
 
     print(
-        "\nCerca i nomi che sembrano appartenere agli ULTIMI moduli della "
-        "rete (spesso le 'teste' di lettura finali, o i layer con indice "
-        "piu' alto). La sottostringa comune a quei nomi e' il valore da "
-        "passare a --unfreeze-pattern."
+        "\nLook for the names that belong to the LAST modules of the "
+        "network (often the final readout 'heads', or the layers with the "
+        "highest index). The substring shared by those names is the value "
+        "to pass to --unfreeze-pattern."
     )
 
 
-# congela tutti i parametri e riattiva solo quelli il cui nome contiene il pattern
+# freezes all the parameters and re-enables only those whose name contains the pattern
 def select_trainable_parameters(model, unfreeze_pattern):
     for p in model.parameters():
-        p.requires_grad = False # congela tutto
+        p.requires_grad = False # freezes everything
 
     trainable = []
     for name, p in model.named_parameters():
         if unfreeze_pattern in name:
-            p.requires_grad = True # riattiva solo i parametri scelti
+            p.requires_grad = True # re-enables only the chosen parameters
             trainable.append(p)
 
-    return trainable # parametri da passare all'ottimizzatore
+    return trainable # parameters to give to the optimizer
 
 
-# ciclo di training: aggiorna solo i parametri scelti e salva i pesi alla fine
+# training loop: updates only the chosen parameters and saves the weights at the end
 def train(model, trainable_params, pairs, epochs, batch_size, learning_rate, out_path):
     import torch
 
-    optimizer = torch.optim.Adam(trainable_params, lr=learning_rate) # ottimizza solo i parametri non congelati
-    mse = torch.nn.MSELoss() # errore quadratico medio tra mappa predetta e heatmap
+    optimizer = torch.optim.Adam(trainable_params, lr=learning_rate) # optimizes only the non frozen parameters
+    mse = torch.nn.MSELoss() # mean squared error between predicted map and heatmap
 
-    # il center bias dipende solo dalle dimensioni, quindi si crea una volta sola
+    # the center bias depends only on the size, so it is built only once
     centerbias = build_centerbias(TARGET_HEIGHT, TARGET_WIDTH)
 
     n = len(pairs)
     model.train()
-    # model.train() rimette in training anche i BatchNorm congelati, che aggiornerebbero
-    # running_mean/running_var a ogni forward: li si riporta in eval() per lasciarli intatti
+    # model.train() also puts the frozen BatchNorm layers in training mode, and they would update
+    # running_mean/running_var at every forward: they are set back to eval() to leave them untouched
     for module in model.modules():
         if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
             module.eval()
 
     for epoch in range(epochs):
-        order = np.random.permutation(n) # mescola le immagini a ogni epoca
+        order = np.random.permutation(n) # shuffles the images at every epoch
         epoch_loss = 0.0
         n_batches = 0
 
         for start in range(0, n, batch_size):
             idx = order[start:start + batch_size]
-            batch_size_actual = len(idx) # l'ultimo batch può essere più piccolo
+            batch_size_actual = len(idx) # the last batch can be smaller
 
-            # tensori del batch: immagini (N, 3, H, W), heatmap (N, H, W), center bias (N, H, W)
+            # batch tensors: images (N, 3, H, W), heatmaps (N, H, W), center bias (N, H, W)
             images = torch.tensor(np.stack([pairs[i][0] for i in idx]))
             targets = torch.tensor(np.stack([pairs[i][1] for i in idx]))
             batch_centerbias = centerbias.unsqueeze(0).repeat(batch_size_actual, 1, 1)
 
-            optimizer.zero_grad() # azzera i gradienti del batch precedente
+            optimizer.zero_grad() # resets the gradients of the previous batch
 
-            log_density = model(images, batch_centerbias) # il modello restituisce una log-densità
+            log_density = model(images, batch_centerbias) # the model returns a log-density
 
-            # log-densità -> densità, sottraendo il massimo prima di exp() per evitare overflow
+            # log-density -> density, subtracting the maximum before exp() to avoid overflow
             log_density_flat = log_density.view(batch_size_actual, -1)
             max_per_image = log_density_flat.max(dim=1, keepdim=True).values
             density = torch.exp(log_density_flat - max_per_image)
-            # normalizza ogni mappa in [0, 1] come la heatmap target
+            # normalizes each map to [0, 1] like the target heatmap
             min_per_image = density.min(dim=1, keepdim=True).values
             max_density = density.max(dim=1, keepdim=True).values
             predicted = (density - min_per_image) / (max_density - min_per_image + 1e-8)
             predicted = predicted.view(batch_size_actual, TARGET_HEIGHT, TARGET_WIDTH)
 
             loss = mse(predicted, targets)
-            loss.backward() # calcola i gradienti
-            optimizer.step() # aggiorna i pesi
+            loss.backward() # computes the gradients
+            optimizer.step() # updates the weights
 
             epoch_loss += loss.item()
             n_batches += 1
 
-        print(f"epoca {epoch + 1}/{epochs}  loss media: {epoch_loss / n_batches:.6f}")
+        print(f"epoch {epoch + 1}/{epochs}  mean loss: {epoch_loss / n_batches:.6f}")
 
-    # salva tutti i pesi del modello (anche quelli congelati) in un file .pt
+    # saves all the model weights (frozen ones included) to a .pt file
     import torch as torch_module
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     torch_module.save(model.state_dict(), out_path)
-    print(f"\nPesi completi salvati in '{out_path}'.")
+    print(f"\nFull weights saved to '{out_path}'.")
 
 
 if __name__ == "__main__":
-    # argomenti da riga di comando
-    parser = argparse.ArgumentParser(description="Fine-tuning di DeepGaze IIE su OSIE.")
+    # command line arguments
+    parser = argparse.ArgumentParser(description="Fine-tuning of DeepGaze IIE on OSIE.")
     parser.add_argument("--osie", required=True,
-                        help="Cartella del repository OSIE clonato.")
+                        help="Folder of the cloned OSIE repository.")
     parser.add_argument("--max-images", type=int, default=200)
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--learning-rate", type=float, default=1e-5)
     parser.add_argument("--unfreeze-pattern", type=str, default=None,
-                        help="Sottostringa dei nomi dei parametri da NON congelare. "
-                             "Obbligatorio a meno di --inspect-only.")
+                        help="Substring of the names of the parameters NOT to freeze. "
+                             "Required unless --inspect-only is used.")
     parser.add_argument("--inspect-only", action="store_true")
     parser.add_argument("--out", default="deepgaze_finetuned.pt")
     args = parser.parse_args()
 
-    # prepara il dataset (immagine, heatmap)
-    print(f"Preparazione dati da OSIE (fino a {args.max_images} immagini)...")
+    # prepares the (image, heatmap) dataset
+    print(f"Preparing data from OSIE (up to {args.max_images} images)...")
     pairs = build_dataset(args.osie, max_images=args.max_images)
-    print(f"Coppie (immagine, heatmap) pronte: {len(pairs)}")
+    print(f"(image, heatmap) pairs ready: {len(pairs)}")
 
-    print("\nCaricamento di DeepGaze IIE...")
+    print("\nLoading DeepGaze IIE...")
     model = load_trainable_model()
 
-    # con --inspect-only stampa solo i parametri ed esce
+    # with --inspect-only it only prints the parameters and exits
     if args.inspect_only:
         inspect_parameters(model)
         raise SystemExit(0)
 
-    # senza pattern non si sa cosa allenare
+    # without a pattern there is nothing to train
     if not args.unfreeze_pattern:
         raise SystemExit(
-            "Serve --unfreeze-pattern. Lancia prima con --inspect-only per "
-            "vedere i nomi dei parametri e scegliere il pattern giusto."
+            "--unfreeze-pattern is required. Run with --inspect-only first to "
+            "see the parameter names and choose the right pattern."
         )
 
     trainable_params = select_trainable_parameters(model, args.unfreeze_pattern)
     total = sum(1 for _ in model.parameters())
-    print(f"Parametri selezionati per il training: {len(trainable_params)} su {total} totali.")
-    # messaggio di errore se il pattern non corrisponde a nessun parametro
+    print(f"Parameters selected for training: {len(trainable_params)} of {total} in total.")
+    # error message if the pattern matches no parameter
     if len(trainable_params) == 0:
         raise SystemExit(
-            f"Nessun parametro corrisponde al pattern '{args.unfreeze_pattern}'. "
-            "Ricontrolla l'output di --inspect-only."
+            f"No parameter matches the pattern '{args.unfreeze_pattern}'. "
+            "Check the output of --inspect-only again."
         )
-    # avviso se il pattern seleziona tutta la rete invece del solo ultimo blocco
+    # warning if the pattern selects the whole network instead of only the last block
     if len(trainable_params) == total:
         print(
-            "ATTENZIONE: il pattern corrisponde a TUTTI i parametri -- "
-            "stai allenando l'intera rete, non solo l'ultimo blocco."
+            "WARNING: the pattern matches ALL the parameters -- "
+            "you are training the whole network, not only the last block."
         )
 
     train(model, trainable_params, pairs, args.epochs, args.batch_size,

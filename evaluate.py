@@ -131,7 +131,7 @@ def evaluate(images_dir, clicks_path):
         path = os.path.join(images_dir, name)
         image_bgr = cv2.imread(path)
         if image_bgr is None:
-            print(f"  ATTENZIONE: immagine non trovata: {name}, saltata.")
+            print(f"  WARNING: image not found: {name}, skipped.")
             continue
 
         # ground truth built only once per image, valid for all the models
@@ -143,7 +143,7 @@ def evaluate(images_dir, clicks_path):
             try:
                 saliency = compute_saliency_at_full_resolution(model_name, image_bgr)
             except Exception as error:
-                print(f"  {model_name} fallito su {name}: {error}") # a failing model does not block the others
+                print(f"  {model_name} failed on {name}: {error}") # a failing model does not block the others
                 continue
 
             row = {"image": name, "model": model_name}
@@ -152,7 +152,7 @@ def evaluate(images_dir, clicks_path):
                 row[metric_name] = round(fn(saliency, reference), 4)
             rows.append(row)
 
-        print(f"  {name}: valutata su {len(AVAILABLE_MODELS)} modelli")
+        print(f"  {name}: evaluated on {len(AVAILABLE_MODELS)} models")
 
     return rows
 
@@ -173,17 +173,17 @@ def summarize(rows):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Valuta i modelli NOVA contro i click raccolti.")
+    parser = argparse.ArgumentParser(description="Evaluate the NOVA models against the collected clicks.")
     parser.add_argument("--images", default="img") # folder with the images
     parser.add_argument("--clicks", default="clicks.json") # file with the clicks saved by collect.py
     args = parser.parse_args()
 
-    print(f"Valutazione su '{args.images}' con ground truth da '{args.clicks}'\n")
+    print(f"Evaluation on '{args.images}' with ground truth from '{args.clicks}'\n")
     rows = evaluate(args.images, args.clicks)
     summary = summarize(rows)
 
     # final table: one row per model with the mean of the three metrics
-    header = f"\n{'Modello':<24}{'CC':>10}{'NSS':>10}{'AUC-Judd':>10}"
+    header = f"\n{'Model':<24}{'CC':>10}{'NSS':>10}{'AUC-Judd':>10}"
     print(header)
     print("-" * len(header.strip()))
     for e in summary:

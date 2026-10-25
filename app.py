@@ -2,10 +2,10 @@
 
 Tabs:
   1. Saliency         baselines and deep models side by side on img/ (or an uploaded image)
-  2. Ranking oggetti  YOLOv8 boxes ranked by mean saliency, compared with the click order
-  3. Raccolta click   the collect.py annotation tool (writes clicks.json)
-  4. Valutazione      experiment 1 (CC, NSS, AUC-Judd) and experiment 2 (Spearman, Kendall)
-  5. Fine-tuning      OSIE ground-truth preview and the fine-tuning scripts
+  2. Object ranking   YOLOv8 boxes ranked by mean saliency, compared with the click order
+  3. Click collection the collect.py annotation tool (writes clicks.json)
+  4. Evaluation       experiment 1 (CC, NSS, AUC-Judd) and experiment 2 (Spearman, Kendall)
+  5. Fine-tuning      OSIE ground-truth preview and the DeepGaze IIE fine-tuning script
 
 Run with:  python app.py   (then open http://127.0.0.1:7860)
 """
@@ -157,7 +157,7 @@ def deep_saliency_many(name, paths):
     global _deep_pool
     missing = deep_missing(name)
     if missing:
-        raise RuntimeError(f"non disponibile, manca {', '.join(missing)} (`{DEEP_SPECS[name][3]}`)")
+        raise RuntimeError(f"not available, missing {', '.join(missing)} (`{DEEP_SPECS[name][3]}`)")
     files = [_cache_file(name, p) for p in paths]
     todo = [i for i, f in enumerate(files) if not f.exists()]
     if todo:
@@ -168,7 +168,7 @@ def deep_saliency_many(name, paths):
         except BrokenProcessPool:
             _deep_pool.shutdown(wait=False)
             _deep_pool = None
-            raise RuntimeError(f"il processo di {name} è terminato in modo anomalo (memoria esaurita?)")
+            raise RuntimeError(f"the {name} process terminated abnormally (out of memory?)")
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         for i, saliency in zip(todo, maps):
             np.save(files[i], saliency)
@@ -235,7 +235,7 @@ def run(path, sigma_frac, sr_sigma, sr_size, alpha, view, show_clicks):
     clicks = clicks_for(path)
     if show_clicks and clicks:
         original = draw_scaled_clicks(original, clicks, image.shape[1] / original_shape(str(path))[1])
-    click_note = f"{len(clicks)} click annotati" if clicks else "nessun click annotato"
+    click_note = f"{len(clicks)} annotated clicks" if clicks else "no annotated clicks"
     info = (f"**{Path(path).name}** — {image.shape[1]}×{image.shape[0]} px — {click_note}  \n"
             + " · ".join(f"{name}: {sec * 1000:.0f} ms" for name, sec in timings.items()))
     return (original,
@@ -256,14 +256,14 @@ def run_deep(path, alpha, view, deep_selected):
     for name in DEEP_NAMES:
         if name not in deep_selected:
             images.append(None)
-            notes.append(f"{name}: disattivato")
+            notes.append(f"{name}: disabled")
             continue
         t = time.perf_counter()
         try:
             saliency = deep_saliency(name, str(path))
         except Exception as exc:
             images.append(None)
-            notes.append(f"{name}: errore ({exc})")
+            notes.append(f"{name}: error ({exc})")
             continue
         images.append(render(saliency))
         notes.append(f"{name}: {(time.perf_counter() - t) * 1000:.0f} ms")
@@ -297,15 +297,15 @@ def _draw_label(rgb, text, x, y, color):
 
 def run_ranking(path, model_name, alpha):
     if path is None:
-        return None, None, "Seleziona un'immagine nella scheda **Saliency**."
+        return None, None, "Select an image in the **Saliency** tab."
     if yolo_missing():
-        return None, None, "YOLOv8 non disponibile: `pip install ultralytics`."
+        return None, None, "YOLOv8 not available: `pip install ultralytics`."
     name = Path(path).name
     boxes = detect_cached(str(path))
     try:
         saliency = model_saliency(model_name, path)
     except Exception as exc:
-        return None, None, f"**{name}** — {model_name}: errore ({exc})"
+        return None, None, f"**{name}** — {model_name}: error ({exc})"
 
     scores = [rank_objects.score_box(full_resolution(saliency, path), b["box"]) for b in boxes]
     clicks = clicks_for(path)
@@ -326,22 +326,22 @@ def run_ranking(path, model_name, alpha):
         annotated = draw_scaled_clicks(annotated, clicks, scale)
 
     table = pd.DataFrame([{
-        "Rank modello": int(pred_ranks[i]),
-        "Oggetto": boxes[i]["label"],
-        "Confidenza YOLO": round(boxes[i]["conf"], 3),
-        "Saliency media": round(scores[i], 4),
-        "Ordine click": gt_ranks[i] if gt_ranks[i] is not None else "—",
+        "Model rank": int(pred_ranks[i]),
+        "Object": boxes[i]["label"],
+        "YOLO confidence": round(boxes[i]["conf"], 3),
+        "Mean saliency": round(scores[i], 4),
+        "Click order": gt_ranks[i] if gt_ranks[i] is not None else "—",
     } for i in order])
 
-    info = f"**{name}** — {model_name} — {len(boxes)} oggetti rilevati da YOLOv8n.  \n"
+    info = f"**{name}** — {model_name} — {len(boxes)} objects detected by YOLOv8n.  \n"
     n_clicked = sum(r is not None for r in gt_ranks)
     if not clicks:
-        info += "Nessun click per questa immagine: annotala nella scheda **Raccolta click** per il confronto."
+        info += "No clicks for this image: annotate it in the **Click collection** tab to compare."
     elif len(boxes) < 2 or n_clicked < 2:
-        info += f"Box cliccate: {n_clicked} — servono almeno 2 oggetti cliccati per Spearman/Kendall."
+        info += f"Clicked boxes: {n_clicked} — at least 2 clicked objects are needed for Spearman/Kendall."
     else:
         rho, tau = rank_objects.compare_rankings(scores, gt_ranks)
-        info += f"Confronto su {n_clicked} box cliccate: **Spearman ρ = {rho:.4f}**, **Kendall τ-b = {tau:.4f}**"
+        info += f"Compared on {n_clicked} clicked boxes: **Spearman ρ = {rho:.4f}**, **Kendall τ-b = {tau:.4f}**"
     return annotated, table, info
 
 
@@ -356,32 +356,32 @@ def run_evaluation(models):
     clicks = load_clicks()
     names = [n for n in clicks if (IMG_DIR / n).exists()]
     if not names or not models:
-        log.append("Nessuna immagine annotata in `clicks.json`." if not names else "Seleziona almeno un modello.")
+        log.append("No annotated images in `clicks.json`." if not names else "Select at least one model.")
         yield emit()
         return
     paths = {n: str(IMG_DIR / n) for n in names}
     models = [m for m in ALL_MODELS if m in models]
-    log.append(f"Valutazione di {len(models)} modelli su {len(names)} immagini annotate.")
+    log.append(f"Evaluating {len(models)} models on {len(names)} annotated images.")
     yield emit()
 
     # deep maps first, one child process per model
     failed = set()
     for model in models:
         if model in DEEP_SPECS:
-            log.append(f"{model}: calcolo delle mappe…")
+            log.append(f"{model}: computing the maps…")
             yield emit()
             t = time.perf_counter()
             try:
                 deep_saliency_many(model, list(paths.values()))
-                log[-1] = f"{model}: mappe pronte ({time.perf_counter() - t:.1f} s)"
+                log[-1] = f"{model}: maps ready ({time.perf_counter() - t:.1f} s)"
             except Exception as exc:
                 failed.add(model)
-                log[-1] = f"{model}: errore ({exc}), escluso"
+                log[-1] = f"{model}: error ({exc}), excluded"
             yield emit()
 
     with_ranking = not yolo_missing()
     if not with_ranking:
-        log.append("YOLOv8 non disponibile (`pip install ultralytics`): esperimento 2 saltato.")
+        log.append("YOLOv8 not available (`pip install ultralytics`): experiment 2 skipped.")
     models = [m for m in models if m not in failed]
     rows = []
     per_model_ranking = {m: [] for m in models}
@@ -408,17 +408,17 @@ def run_evaluation(models):
                 scores = [rank_objects.score_box(saliency, b["box"]) for b in boxes]
                 per_model_ranking[model].append(rank_objects.compare_rankings(scores, gt_ranks))
 
-        note = f"{len(boxes)} oggetti, usata nel ranking" if use_ranking else "esclusa dal ranking"
-        log.append(f"{name}: valutata ({note})" if with_ranking else f"{name}: valutata")
+        note = f"{len(boxes)} objects, used in the ranking" if use_ranking else "excluded from the ranking"
+        log.append(f"{name}: evaluated ({note})" if with_ranking else f"{name}: evaluated")
         yield emit()
 
     pixel = pd.DataFrame(evaluate.summarize(rows))
     pixel = pixel.set_index("model").loc[models].reset_index()  # keep the model order of the app
     ranking = pd.DataFrame(rank_objects.summarize(per_model_ranking)) if with_ranking else None
     if ranking is not None and ranking.empty:
-        log.append("Nessuna immagine con almeno 2 oggetti cliccati: ranking non calcolabile.")
+        log.append("No image with at least 2 clicked objects: the ranking cannot be computed.")
         ranking = None
-    log.append("**Fatto.**")
+    log.append("**Done.**")
     yield emit(pixel, ranking, pd.DataFrame(rows))
 
 
@@ -439,12 +439,12 @@ def osie_names(osie_dir):
 def run_osie_preview(osie_dir, index, model_name, alpha):
     names = osie_names(osie_dir)
     if names is None:
-        return None, None, f"`data/eye/fixations.mat` non trovato in `{osie_dir}`."
+        return None, None, f"`data/eye/fixations.mat` not found in `{osie_dir}`."
     index = int(np.clip(index, 0, len(names) - 1))
     name = names[index]
     path = Path(osie_dir) / "data" / "stimuli" / name
     if not path.exists():
-        return None, None, f"Immagine `{name}` non trovata."
+        return None, None, f"Image `{name}` not found."
     points = _osie_fixations(str(Path(osie_dir) / "data" / "eye" / "fixations.mat"))[name]
 
     image = load_bgr(path)
@@ -455,19 +455,19 @@ def run_osie_preview(osie_dir, index, model_name, alpha):
     for x, y in points:
         cv2.circle(gt_view, (int(x * scale), int(y * scale)), 3, (255, 255, 255), -1)
 
-    info = (f"**{name}** (indice {index} di {len(names)}) — {len(points)} fissazioni di tutti gli osservatori.  \n"
-            "Le prime 200 immagini sono quelle usate di default per il fine-tuning.")
-    if model_name == "(nessuno)":
+    info = (f"**{name}** (index {index} of {len(names)}) — {len(points)} fixations from all the observers.  \n"
+            "The first 200 images are the ones used for fine-tuning by default.")
+    if model_name == "(none)":
         return gt_view, None, info
     try:
         saliency = model_saliency(model_name, path)
     except Exception as exc:
-        return gt_view, None, info + f"  \n{model_name}: errore ({exc})"
+        return gt_view, None, info + f"  \n{model_name}: error ({exc})"
     full = full_resolution(saliency, path)
     fixation_map = evaluate.clicks_to_fixation_map([{"x": x, "y": y} for x, y in points], h, w)
     scores = {"CC": evaluate.cc(full, gt), "NSS": evaluate.nss(full, fixation_map),
               "AUC-Judd": evaluate.auc_judd(full, fixation_map)}
-    info += f"  \n{model_name} vs fissazioni OSIE: " + " · ".join(f"**{k}** {v:.4f}" for k, v in scores.items())
+    info += f"  \n{model_name} vs OSIE fixations: " + " · ".join(f"**{k}** {v:.4f}" for k, v in scores.items())
     return gt_view, to_overlay(image, saliency, alpha), info
 
 
@@ -479,14 +479,14 @@ _train_proc = None
 def run_finetune(osie_dir, max_images, epochs, batch_size, learning_rate, pattern, inspect_only):
     global _train_proc
     if _train_proc is not None and _train_proc.poll() is None:
-        yield "Un fine-tuning è già in corso."
+        yield "A fine-tuning run is already in progress."
         return
     if osie_names(osie_dir) is None:
-        yield f"`data/eye/fixations.mat` non trovato in '{osie_dir}'. Clona prima il repository OSIE."
+        yield f"`data/eye/fixations.mat` not found in '{osie_dir}'. Clone the OSIE repository first."
         return
     pattern = pattern.strip()
     if not pattern and not inspect_only:
-        yield "Indica un unfreeze pattern (usa «Solo ispezione» per vedere i nomi dei parametri)."
+        yield "Enter an unfreeze pattern (use \"Inspect only\" to list the parameter names)."
         return
 
     cmd = [sys.executable, "-u", str(FINETUNE_SCRIPT), "--osie", str(osie_dir),
@@ -511,9 +511,9 @@ def run_finetune(osie_dir, max_images, epochs, batch_size, learning_rate, patter
         # also reached when the run is cancelled with the Stop button
         if _train_proc.poll() is None:
             _train_proc.terminate()
-    log += f"\n[processo terminato con codice {code}]"
+    log += f"\n[process exited with code {code}]"
     if code == 0 and not inspect_only:
-        log += "\nI nuovi pesi sono usati subito da «DeepGaze IIE (fine-tuned)» (la cache viene rigenerata)."
+        log += "\nThe new weights are used right away by \"DeepGaze IIE (fine-tuned)\" (its cache is rebuilt)."
     yield log
 
 
@@ -530,19 +530,19 @@ with gr.Blocks(title="NOVA") as demo:
 
     with gr.Tabs():
         with gr.Tab("1 · Saliency"):
-            gr.Markdown("Seleziona un'immagine dalla galleria per confrontare i metodi. "
-                        "L'immagine scelta è usata anche nella scheda **Ranking oggetti**.")
+            gr.Markdown("Select an image from the gallery to compare the methods. "
+                        "The selected image is also used in the **Object ranking** tab.")
             with gr.Row():
                 with gr.Column(scale=1, min_width=280):
                     gallery = gr.Gallery(
                         value=[str(p) for p in IMAGE_PATHS], label="img/", columns=3,
                         height=420, allow_preview=False, object_fit="cover",
                     )
-                    upload = gr.Image(label="…oppure carica un'immagine", type="filepath", height=160)
+                    upload = gr.Image(label="…or upload an image", type="filepath", height=160)
 
-                    view = gr.Radio(["Heatmap", "Overlay", "Grayscale"], value="Overlay", label="Visualizzazione")
-                    alpha = gr.Slider(0.1, 0.9, value=0.5, step=0.05, label="Opacità overlay")
-                    show_clicks = gr.Checkbox(value=True, label="Mostra i click (ground truth) sull'originale")
+                    view = gr.Radio(["Heatmap", "Overlay", "Grayscale"], value="Overlay", label="View")
+                    alpha = gr.Slider(0.1, 0.9, value=0.5, step=0.05, label="Overlay opacity")
+                    show_clicks = gr.Checkbox(value=True, label="Show the clicks (ground truth) on the original")
 
                     with gr.Accordion("Center prior", open=False):
                         sigma_frac = gr.Slider(0.05, 1.0, value=0.25, step=0.05, label="sigma_frac")
@@ -553,7 +553,7 @@ with gr.Blocks(title="NOVA") as demo:
                 with gr.Column(scale=3):
                     info = gr.Markdown()
                     with gr.Row():
-                        out_original = gr.Image(label="Originale", interactive=False)
+                        out_original = gr.Image(label="Original", interactive=False)
                         out_center = gr.Image(label="Center prior", interactive=False)
                     with gr.Row():
                         out_itti = gr.Image(label="Itti-Koch", interactive=False)
@@ -561,76 +561,76 @@ with gr.Blocks(title="NOVA") as demo:
 
                     deep_selected = gr.CheckboxGroup(
                         DEEP_NAMES, value=[n for n in DEEP_NAMES if not deep_missing(n)],
-                        label="Modelli deep (il primo calcolo scarica i pesi e può richiedere decine di secondi)")
+                        label="Deep models (the first run downloads the weights and can take tens of seconds)")
                     deep_info = gr.Markdown()
                     with gr.Row():
                         out_msinet = gr.Image(label="MSI-Net", interactive=False)
                         out_deepgaze = gr.Image(label="DeepGaze IIE", interactive=False)
                         out_deepgaze_ft = gr.Image(label="DeepGaze IIE (fine-tuned)", interactive=False)
 
-        with gr.Tab("2 · Ranking oggetti") as ranking_tab:
-            gr.Markdown("YOLOv8n rileva gli oggetti nell'immagine selezionata nella scheda **Saliency**; "
-                        "ogni box riceve come punteggio la saliency media al suo interno. Se l'immagine è "
-                        "annotata, il ranking è confrontato con l'ordine dei click (cerchi numerati).")
+        with gr.Tab("2 · Object ranking") as ranking_tab:
+            gr.Markdown("YOLOv8n detects the objects in the image selected in the **Saliency** tab; "
+                        "each box is scored by the mean saliency inside it. If the image is "
+                        "annotated, the ranking is compared with the click order (numbered circles).")
             with gr.Row():
-                rank_model = gr.Dropdown(ALL_MODELS, value="DeepGaze IIE", label="Modello di saliency")
-                rank_btn = gr.Button("Calcola ranking", variant="primary")
+                rank_model = gr.Dropdown(ALL_MODELS, value="DeepGaze IIE", label="Saliency model")
+                rank_btn = gr.Button("Compute ranking", variant="primary")
             rank_info = gr.Markdown()
             with gr.Row():
-                rank_image = gr.Image(label="Box ordinate per saliency (rosso = più saliente)",
+                rank_image = gr.Image(label="Boxes ranked by saliency (red = most salient)",
                                       interactive=False, scale=3)
-                rank_table = gr.Dataframe(label="Oggetti", interactive=False, scale=2)
+                rank_table = gr.Dataframe(label="Objects", interactive=False, scale=2)
 
-        with gr.Tab("3 · Raccolta click"):
+        with gr.Tab("3 · Click collection"):
             # a Blocks created inside another one is rendered into it automatically
             collect.build_interface(str(IMG_DIR), str(CLICKS_PATH))
 
-        with gr.Tab("4 · Valutazione"):
+        with gr.Tab("4 · Evaluation"):
             gr.Markdown(
-                "Esegue i due esperimenti su tutte le immagini annotate in `clicks.json`:  \n"
-                "**1. Pixel level** — CC, NSS e AUC-Judd tra la mappa e i click.  \n"
-                "**2. Ranking oggetti** — Spearman ρ e Kendall τ-b tra il ranking delle box YOLO "
-                "e l'ordine dei click (solo immagini con almeno 2 oggetti cliccati).  \n"
-                "Le mappe deep sono condivise con la scheda Saliency tramite la cache su disco.")
+                "Runs the two experiments on all the images annotated in `clicks.json`:  \n"
+                "**1. Pixel level** — CC, NSS and AUC-Judd between the map and the clicks.  \n"
+                "**2. Object ranking** — Spearman ρ and Kendall τ-b between the ranking of the YOLO boxes "
+                "and the click order (only images with at least 2 clicked objects).  \n"
+                "Deep maps are shared with the Saliency tab through the disk cache.")
             eval_models = gr.CheckboxGroup(
                 ALL_MODELS, value=[m for m in ALL_MODELS if m not in DEEP_SPECS or not deep_missing(m)],
-                label="Modelli")
-            eval_btn = gr.Button("Esegui valutazione", variant="primary")
+                label="Models")
+            eval_btn = gr.Button("Run evaluation", variant="primary")
             eval_log = gr.Markdown()
-            eval_pixel = gr.Dataframe(label="Esperimento 1 — media per modello", interactive=False)
-            eval_ranking = gr.Dataframe(label="Esperimento 2 — media per modello", interactive=False)
-            with gr.Accordion("Esperimento 1 — dettaglio per immagine", open=False):
+            eval_pixel = gr.Dataframe(label="Experiment 1 — mean per model", interactive=False)
+            eval_ranking = gr.Dataframe(label="Experiment 2 — mean per model", interactive=False)
+            with gr.Accordion("Experiment 1 — per-image details", open=False):
                 eval_rows = gr.Dataframe(interactive=False)
 
         with gr.Tab("5 · Fine-tuning"):
-            osie_dir = gr.Textbox(str(OSIE_DIR), label="Cartella del repository OSIE")
-            with gr.Accordion("Ground truth OSIE", open=True):
-                gr.Markdown("Heatmap delle fissazioni costruita da `osie_ground_truth.py` "
-                            "(σ = 0.05 × larghezza), opzionalmente confrontata con un modello.")
+            osie_dir = gr.Textbox(str(OSIE_DIR), label="OSIE repository folder")
+            with gr.Accordion("OSIE ground truth", open=True):
+                gr.Markdown("Fixation heatmap built by `osie_ground_truth.py` "
+                            "(σ = 0.05 × width), optionally compared with a model.")
                 with gr.Row():
-                    osie_index = gr.Number(0, precision=0, minimum=0, label="Indice immagine")
-                    osie_model = gr.Dropdown(["(nessuno)"] + ALL_MODELS, value="(nessuno)",
-                                             label="Confronta con")
-                    osie_btn = gr.Button("Mostra", variant="primary")
+                    osie_index = gr.Number(0, precision=0, minimum=0, label="Image index")
+                    osie_model = gr.Dropdown(["(none)"] + ALL_MODELS, value="(none)",
+                                             label="Compare with")
+                    osie_btn = gr.Button("Show", variant="primary")
                 osie_info = gr.Markdown()
                 with gr.Row():
-                    osie_gt = gr.Image(label="Fissazioni + heatmap", interactive=False)
-                    osie_pred = gr.Image(label="Mappa del modello", interactive=False)
+                    osie_gt = gr.Image(label="Fixations + heatmap", interactive=False)
+                    osie_pred = gr.Image(label="Model map", interactive=False)
 
-            with gr.Accordion("Fine-tuning di DeepGaze IIE su OSIE", open=True):
-                gr.Markdown("Lancia `finetune_deepgaze.py` in un processo separato; con i default richiede "
-                            "circa 20 minuti su CPU. MSI-Net non è addestrabile: i suoi pesi sono congelati.")
+            with gr.Accordion("Fine-tuning DeepGaze IIE on OSIE", open=True):
+                gr.Markdown("Runs `finetune_deepgaze.py` in a separate process; with the defaults it takes "
+                            "about 20 minutes on CPU. MSI-Net cannot be trained: its weights are frozen.")
                 with gr.Row():
                     ft_pattern = gr.Textbox("fixation_selection_networks", label="Unfreeze pattern")
-                    ft_inspect = gr.Checkbox(False, label="Solo ispezione (elenca i parametri)")
+                    ft_inspect = gr.Checkbox(False, label="Inspect only (list the parameters)")
                 with gr.Row():
-                    ft_max_images = gr.Number(200, precision=0, minimum=1, label="Max immagini")
-                    ft_epochs = gr.Number(5, precision=0, minimum=1, label="Epoche")
+                    ft_max_images = gr.Number(200, precision=0, minimum=1, label="Max images")
+                    ft_epochs = gr.Number(5, precision=0, minimum=1, label="Epochs")
                     ft_batch = gr.Number(4, precision=0, minimum=1, label="Batch size")
                     ft_lr = gr.Number(1e-5, label="Learning rate")
                 with gr.Row():
-                    ft_start = gr.Button("Avvia", variant="primary")
-                    ft_stop = gr.Button("Interrompi", variant="stop")
+                    ft_start = gr.Button("Start", variant="primary")
+                    ft_stop = gr.Button("Stop", variant="stop")
                 ft_log = gr.Textbox(label="Log", lines=18, max_lines=18, autoscroll=True, interactive=False)
 
     # tab 1
