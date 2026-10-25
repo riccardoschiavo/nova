@@ -137,9 +137,10 @@ def _deep_worker(module, function, images):
 def _deep_executor():
     global _deep_pool
     if _deep_pool is None:
+        # max_tasks_per_child exists only on Python 3.11+; older versions close the pool after each job
+        extra = {"max_tasks_per_child": 1} if sys.version_info >= (3, 11) else {}
         _deep_pool = ProcessPoolExecutor(
-            max_workers=1, mp_context=multiprocessing.get_context("spawn"),
-            max_tasks_per_child=1)
+            max_workers=1, mp_context=multiprocessing.get_context("spawn"), **extra)
     return _deep_pool
 
 
@@ -169,6 +170,9 @@ def deep_saliency_many(name, paths):
             _deep_pool.shutdown(wait=False)
             _deep_pool = None
             raise RuntimeError(f"the {name} process terminated abnormally (out of memory?)")
+        if sys.version_info < (3, 11):
+            _deep_pool.shutdown()
+            _deep_pool = None
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         for i, saliency in zip(todo, maps):
             np.save(files[i], saliency)

@@ -72,7 +72,7 @@ Not stored in the repository (see `.gitignore`): `venv/`, `.cache/`, model weigh
 
 Tested on Linux (Ubuntu) with Python 3.13, CPU only (no GPU).
 
-**1. Requirements.** Python ≥ 3.10 with `venv` and `pip`, plus `git`. On Debian/Ubuntu, if
+**1. Requirements.** Python ≥ 3.11 with `venv` and `pip`, plus `git`. On Debian/Ubuntu, if
 `python3 -m venv` fails with *"ensurepip is not available"*, run `sudo apt install python3-venv`.
 
 **2. Clone the repository and create a virtual environment.**
