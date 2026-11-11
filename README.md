@@ -3,10 +3,10 @@
 Course project for *Industrial Applications of Computer Vision* (University of Padova, A.Y. 2025/26).
 Authors: Riccardo Schiavo, Eros Patarini.
 
-> **Project status (work in progress).** The full pipeline is implemented: three classical
-> saliency baselines, two pretrained deep models (DeepGaze IIE, MSI-Net) plus a DeepGaze IIE
-> fine-tuned on OSIE, a click-based ground-truth collection tool, a pixel-level evaluation and a
-> YOLOv8-based object ranking.
+> **Project status.** The full pipeline is implemented: three classical saliency baselines, two
+> pretrained deep models (DeepGaze IIE, MSI-Net) plus a DeepGaze IIE fine-tuned on OSIE, a
+> click-based ground-truth collection tool, a pixel-level evaluation and a YOLOv8-based object
+> ranking. Final results on 23 annotated images are in [Results](#results).
 
 ## Overview
 
@@ -194,13 +194,24 @@ models are slow at 12 MP.
 | Spectral Residual | Classical frequency-domain saliency | Implemented | Written from scratch following Hou & Zhang (2007) |
 | DeepGaze IIE | Deep saliency (PyTorch) | Implemented | Pretrained model from `deepgaze_pytorch`, used with a uniform centre bias; wrapper written by us |
 | DeepGaze IIE (fine-tuned) | Deep saliency (PyTorch) | Implemented | DeepGaze IIE with the readout block fine-tuned on OSIE by us |
-| MSI-Net | Deep saliency (TensorFlow) | Implemented | Pretrained SALICON model from Kaggle / TF Hub; wrapper written by us |
+| MSI-Net | Deep saliency (TensorFlow) | Implemented | Pretrained SALICON model from Kaggle / TF Hub; wrapper written by us, pre-processing as in the official code (see below) |
 | MSI-Net (fine-tuned) | Deep saliency (TensorFlow) | Training script only | `finetune_msinet.py` saves the trained variables, but they are not loaded by any model yet |
 | YOLOv8n | Object detector for the ranking | Implemented | Pretrained COCO model from `ultralytics`, used as is |
 
 **DeepGaze IIE.** We pass a uniform centre bias (`log(1/(H·W))` at every pixel) so that the
 model does not get a free centre prior, and convert its log-density output to a density
-normalised to `[0, 1]`.
+normalised to `[0, 1]`. The centre bias enters DeepGaze IIE only in its finalizer, as an
+additive term on the log-density that the final `logsumexp` normalisation removes when it is
+constant: with a uniform centre bias the explicit centre prior of the model has no effect
+(maps with `log(1)` and `log(0.3)` differ by at most 1e-6).
+
+**MSI-Net.** The image is converted to RGB, resized keeping the aspect ratio to fit 320×240,
+padded with the value 126 and fed with pixel values in `[0, 255]`: the network subtracts the
+ImageNet mean itself (official code: [alexanderkroner/saliency](https://github.com/alexanderkroner/saliency),
+`model.py` and `data.py`). The padding is cropped from the output before resizing it back.
+Earlier versions of `src/models/msi_net.py` (before commit `2f83c00`) divided the pixels by 255
+and stretched the image to 320×240: the network then received an almost constant input and
+returned nearly the same map for every image (CC 0.998 between the maps of different images).
 
 **Fine-tuning DeepGaze IIE on OSIE.** DeepGaze IIE is an ensemble of 4 networks (different
 backbones). In each one we freeze the backbone, the saliency network and the finalizer, and
@@ -230,8 +241,9 @@ The clicks are then used in two ways:
 - **Object ranking**: each YOLO box gets the order of the first click that falls inside it.
   Boxes that are never clicked are excluded.
 
-Current data: **8 images** (`1, 10, 11, 12, 13, 14, 15, 21.jpeg`), 3 clicks each, from a single
-annotator.
+Current data: **23 images** (all of `img/`), **92 clicks** (3–6 per image), from a **single
+annotator**. The clicks are significantly closer to the image centre than uniformly placed
+points (mean normalised distance 0.405 vs 0.541), and the first click is the most central.
 
 ## Baselines
 
@@ -252,8 +264,11 @@ Pixel level (`evaluate.py`; maps are computed on the image downscaled to a longe
 - **NSS** (Normalized Scanpath Saliency): mean of the z-scored predicted map at the clicked
   pixels. 0 = chance; higher is better.
 - **AUC-Judd**: area under the ROC curve that uses the saliency at the clicked pixels as
-  thresholds, with clicked pixels as positives and all other pixels as negatives. 0.5 = chance,
-  1 = perfect.
+  thresholds, with clicked pixels as positives and all other pixels as negatives. 1 = perfect.
+  With only 3–6 clicks per image the chance level is **about 0.60, not 0.5**: the trapezoidal
+  rule over the click thresholds (MIT benchmark definition) overestimates the area by
+  `fp_n / (2·n_clicks)`, about `1/(2(n+1))` on a random map. A constant map gives exactly 0.5
+  only through an explicit special case in the code.
 
 Object ranking (`rank_objects.py`):
 
@@ -268,49 +283,64 @@ contain a click.
 
 ## Results
 
-Preliminary results on the 8 annotated images (CPU run, 24 Oct 2026). Mean over the images;
-best value in bold.
+Final run on the **23 annotated images** of `img/` (CPU, 25 Oct 2026), with the protocol of
+`evaluate.py` and `rank_objects.py`: saliency computed with a longer side of 800 px and resized
+back to the original resolution. Mean over the images, with the 95% bootstrap confidence
+interval over the images (10 000 resamples) in brackets.
 
-**Experiments.**
+**Experiment 1: pixel level** (23 images).
 
-1. **Pixel-level evaluation** (`evaluate.py`) — compare predicted saliency maps against the
-   human clicks with CC, NSS and AUC-Judd.
-2. **Object ranking** (`rank_objects.py`) — detect objects with YOLOv8, rank them by the mean
-   predicted saliency inside each box, and compare the ranking with the order of the human
-   clicks using Spearman's ρ and Kendall's τ-b.
+| Model | CC | NSS | AUC-Judd | AUC-Judd − chance |
+|---|---|---|---|---|
+| Center Prior | 0.273 [0.211, 0.334] | 0.676 [0.518, 0.822] | 0.770 [0.736, 0.800] | 0.167 |
+| Spectral Residual | 0.297 [0.241, 0.356] | 1.033 [0.820, 1.260] | 0.812 [0.776, 0.847] | 0.210 |
+| Itti-Koch | 0.142 [0.086, 0.198] | 0.702 [0.400, 1.048] | 0.730 [0.674, 0.784] | 0.127 |
+| DeepGaze IIE | 0.439 [0.374, 0.498] | **1.944** [1.650, 2.241] | **0.899** [0.879, 0.919] | **0.297** |
+| DeepGaze IIE (fine-tuned) | 0.437 [0.372, 0.497] | **1.959** [1.657, 2.264] | **0.900** [0.879, 0.919] | **0.297** |
+| MSI-Net | **0.449** [0.385, 0.508] | 1.640 [1.398, 1.873] | 0.887 [0.861, 0.909] | 0.284 |
+| *Uniform map* | 0.000 | 0.000 | 0.500 | −0.103 |
+| *Random noise* | 0.000 | 0.016 | 0.606 | 0.003 |
+| *Shuffled clicks of the other images* | 0.249 | 0.705 | 0.777 | 0.174 |
 
-**Experiment 1 — pixel level** (8 images):
+"AUC-Judd − chance" subtracts the chance level of AUC-Judd measured on each image with 100
+random maps and the same clicks (mean 0.603, see [Metrics](#metrics)).
 
-| Model | CC | NSS | AUC-Judd |
+**Experiment 2: object ranking** (13 images; 10 are excluded: 2 with fewer than 2 YOLO boxes,
+6 with fewer than 2 clicked boxes, and 7.jpeg and 16.jpeg, where a single click falls inside all
+the clicked overlapping boxes and gives them the same rank). Top-1 = the box with the highest
+score is the one of the first click, among the clicked boxes.
+
+| Model / rule | Spearman | Kendall | Top-1 |
 |---|---|---|---|
-| Center Prior | 0.2765 | 0.8782 | 0.8260 |
-| Itti-Koch | 0.0328 | 0.1044 | 0.6418 |
-| Spectral Residual | 0.1865 | 0.7969 | 0.7471 |
-| DeepGaze IIE | **0.4289** | **1.9223** | **0.9036** |
-| DeepGaze IIE (fine-tuned) | *to be re-run* | | |
-| MSI-Net | 0.2011 | 0.5810 | 0.7689 |
+| Center Prior | 0.496 | 0.459 | 10/13 |
+| Spectral Residual | 0.006 | −0.014 | 7/13 |
+| Itti-Koch | −0.042 | −0.049 | 7/13 |
+| DeepGaze IIE | **0.688** | **0.664** | **12/13** |
+| DeepGaze IIE (fine-tuned) | **0.688** | **0.664** | **12/13** |
+| MSI-Net | 0.380 | 0.356 | 10/13 |
+| *Rule: larger box first* | 0.196 | 0.213 | 8/13 |
+| *Rule: higher YOLO confidence first* | −0.004 | 0.003 | 7/13 |
+| *Rule: box closer to the centre first* | 0.429 | 0.396 | 9/13 |
+| *Random ranking (expected)* | 0 | 0 | 0.506 |
 
-**Experiment 2 — object ranking** (4 of the 8 images are usable: 10, 12, 14, 21):
+`rank_objects.py` reports 15 images: in 7.jpeg and 16.jpeg Spearman and Kendall are undefined
+(constant ground truth) and are skipped in the mean, so the means above are the same.
 
-| Model | Spearman | Kendall |
-|---|---|---|
-| Center Prior | 0.0264 | 0.0000 |
-| Itti-Koch | 0.0847 | 0.0923 |
-| Spectral Residual | -0.0207 | -0.0195 |
-| DeepGaze IIE | **0.5264** | **0.5000** |
-| DeepGaze IIE (fine-tuned) | *to be re-run* | |
-| MSI-Net | 0.2372 | 0.2236 |
+**Observations** (statistics computed in the presentation, n = 23 and n = 13):
 
-**Observations.**
-
-- DeepGaze IIE is the best model in both experiments, and the only one clearly above the
-  Center Prior at pixel level.
-- MSI-Net is below the Center Prior at pixel level but above it in the ranking.
-- Itti-Koch is close to chance at pixel level (AUC-Judd 0.64).
-- The ranking numbers are very noisy: only 4 images are used, with 2–5 clicked boxes each, and
-  with 2 boxes Spearman can only be +1 or −1.
-- The fine-tuned DeepGaze IIE row is missing because a bug in `src/models/deepgaze.py` made it
-  fail during this run; the bug is fixed and the experiments must be re-run.
+- DeepGaze IIE is above the Center Prior in all three pixel metrics (Wilcoxon signed-rank,
+  Holm-corrected p ≤ 0.004, better on 19–23 of 23 images). MSI-Net and DeepGaze IIE are not
+  separated (Friedman + Nemenyi, critical difference 2.19 ranks).
+- The fine-tuning changes almost nothing: the fine-tuned and base maps have CC 0.9998, and no
+  metric differs significantly (Wilcoxon, Holm).
+- The classical models are close to the Center Prior and to the "shuffled clicks" baseline,
+  which exploit only the centre bias of the clicks.
+- In the ranking only DeepGaze IIE is above a random ranking (permutation test, Holm-corrected
+  p = 0.013 for Spearman, 0.016 for Top-1). A Friedman test over the 6 models and the 3 rules is
+  not significant (p = 0.17 for Spearman). The Center Prior ranks the boxes almost like the
+  "closer to the centre" rule (Kendall τ-b 0.85 between the two).
+- CC depends on the σ of the click heatmap (the order of the models changes between σ = 2.5% and
+  10% of the width); NSS and AUC-Judd do not depend on σ.
 
 ## Sample images
 
@@ -329,20 +359,46 @@ best value in bold.
 
 ## Third-party code & licences
 
-| Component | Use | Licence |
-|---|---|---|
-| [NumPy](https://numpy.org/) | Arrays | BSD-3-Clause |
-| [OpenCV](https://opencv.org/) (`opencv-python`) | Image I/O and processing | Apache-2.0 |
-| [Gradio](https://www.gradio.app/) | Demo and annotation UIs | Apache-2.0 |
-| [SciPy](https://scipy.org/) | Reading OSIE `.mat` files, Spearman/Kendall | BSD-3-Clause |
-| [PyTorch](https://pytorch.org/) | DeepGaze IIE | BSD-3-Clause |
-| [DeepGaze](https://github.com/matthias-k/DeepGaze) (`deepgaze_pytorch`) | DeepGaze IIE model and weights | See the upstream repository |
-| [TensorFlow](https://www.tensorflow.org/) and `tensorflow_hub` | MSI-Net | Apache-2.0 |
-| [MSI-Net](https://github.com/alexanderkroner/saliency) | Pretrained SALICON model | See the upstream repository |
-| [Ultralytics](https://github.com/ultralytics/ultralytics) | YOLOv8n detector and weights | AGPL-3.0 |
-| [OSIE](https://github.com/NUS-VIP/predicting-human-gaze-beyond-pixels) | Fine-tuning data | See the upstream repository |
+| Component | Version tested | Use | Source | Licence |
+|---|---|---|---|---|
+| NumPy | 2.5.4 | Arrays | [numpy.org](https://numpy.org/) | BSD-3-Clause |
+| OpenCV (`opencv-python`) | 4.11.0 | Image I/O and processing | [opencv.org](https://opencv.org/) | Apache-2.0 |
+| Gradio | 6.30.0 | Demo and annotation UIs | [gradio.app](https://www.gradio.app/) | Apache-2.0 |
+| pandas | 3.0.6 | Tables in `app.py` (installed as a dependency of Gradio) | [pandas.pydata.org](https://pandas.pydata.org/) | BSD-3-Clause |
+| SciPy | 1.18.1 | Reading OSIE `.mat` files, Spearman/Kendall | [scipy.org](https://scipy.org/) | BSD-3-Clause |
+| PyTorch | 2.14.1 (CPU) | DeepGaze IIE | [pytorch.org](https://pytorch.org/) | BSD-3-Clause |
+| einops | 0.8.2 | Required by `deepgaze_pytorch` | [arogozhnikov/einops](https://github.com/arogozhnikov/einops) | MIT |
+| DeepGaze (`deepgaze_pytorch`) | 1.2.1, commit `c7db17e` | DeepGaze IIE model and pretrained weights | [matthias-k/DeepGaze](https://github.com/matthias-k/DeepGaze) | **No licence declared** in the repository (no LICENSE file; `license='MIT'` is commented out in `setup.py`). Used for academic coursework only, citing Linardos et al. (2021). |
+| TensorFlow | 2.21.0 | MSI-Net | [tensorflow.org](https://www.tensorflow.org/) | Apache-2.0 |
+| `tensorflow_hub` | 0.16.1 | Loading MSI-Net | [tensorflow/hub](https://github.com/tensorflow/hub) | Apache-2.0 |
+| MSI-Net | Kaggle model `alexanderkroner/msi-net/tensorFlow2/salicon/1` | Pretrained SALICON model | [alexanderkroner/saliency](https://github.com/alexanderkroner/saliency) | MIT (code repository) |
+| Ultralytics | 8.4.185 | YOLOv8n detector and COCO weights (`yolov8n.pt`) | [ultralytics/ultralytics](https://github.com/ultralytics/ultralytics) | AGPL-3.0 |
+| OSIE dataset | — | Fine-tuning data (not stored here) | [NUS-VIP/predicting-human-gaze-beyond-pixels](https://github.com/NUS-VIP/predicting-human-gaze-beyond-pixels) | MIT |
+| CLIP | — | Listed in `requirements.txt`, not used by any script | [openai/CLIP](https://github.com/openai/CLIP) | MIT |
 
-No third-party code or weights are stored in this repository.
+No third-party code or weights are stored in this repository: the weights are downloaded at
+first use (DeepGaze IIE and its backbones into `~/.cache/torch/`, MSI-Net from Kaggle / TF Hub,
+`yolov8n.pt` into the repository root).
+
+## Use of AI / LLM tools
+
+- **Claude (Anthropic)**, used in four ways:
+  - **in Antigravity**, as a coding assistant during development: it wrote parts of the project
+    code and helped with debugging and explanations;
+  - **in chat**, to plan the evaluation protocol and the statistical analysis, to write the
+    instructions given to Claude Code, and to prepare the study notes for the oral presentation;
+  - **for literature search**, to find and summarise information from the computer vision
+    literature (saliency models, evaluation metrics, statistical tests), based on papers and
+    other reliable sources; the papers actually used are listed in [References](#references);
+  - **in Claude Code**, in the final evaluation phase (below).
+- **Claude Code (Anthropic)**, in the final evaluation phase. It:
+  - found and fixed the MSI-Net pre-processing bug in `src/models/msi_net.py` (commit `2f83c00`,
+    see [Models](#models));
+  - wrote the analysis scripts (not included in this repository) that produced the statistics,
+    figures and tables of the final presentation: bootstrap confidence intervals, Friedman /
+    Nemenyi and Wilcoxon tests, chance level of AUC-Judd, ranking baselines and permutation tests,
+    sensitivity to σ and resolution, checks on the fine-tuned weights;
+  - updated this README (results, MSI-Net, licences, limitations).
 
 ## Reused / adapted / original
 
@@ -404,20 +460,31 @@ No third-party code or weights are stored in this repository.
 
 ## Known limitations
 
-- **Small ground truth**: 8 images, 3 clicks each, one annotator. The ranking uses only 4 of
-  them. The results are preliminary.
+- **Small ground truth**: 23 images, 3–6 clicks each (92 in total), one annotator, so no
+  inter-observer upper bound can be estimated. The ranking uses only 13 images, 7 of which have
+  only 2 clicked boxes (Spearman is then +1 or −1).
 - **Clicks are not fixations**: clicks are deliberate choices in order of importance, not eye
   movements, so the ground truth measures importance more than free-viewing attention.
-- **Ranking depends on YOLO**: objects not in the COCO classes, or missed by YOLOv8n, cannot be
-  ranked; overlapping boxes can receive the same click.
-- **Fine-tuning**: small (200 images, 5 epochs, CPU), with no validation split, and the loss
-  decreased only slightly. The fine-tuned MSI-Net weights are not used by any model yet.
-- **No GPU**: everything runs on CPU, and the deep models take seconds per image.
-- **Itti-Koch** maps are coarse (computed at 1/16 of the input resolution) and can show
-  spurious high values along the image borders.
+- **Ranking depends on YOLO**: 55 of the 92 clicks (60%) fall outside every YOLO box, and in 10
+  of 23 images the first click falls outside every box. Objects not in the COCO classes, or
+  missed by YOLOv8n, cannot be ranked; overlapping boxes can receive the same click.
+- **Box score**: the mean saliency inside the box. Other choices (max, sum, 90th percentile)
+  change the results; the plain sum favours large boxes.
+- **AUC-Judd**: its chance level is about 0.60 with this number of clicks (see [Metrics](#metrics)).
+- **Fine-tuning**: small (200 images, 5 epochs, lr 1e-5, CPU), MSE loss instead of the
+  log-likelihood used to train DeepGaze, no validation split; only 0.30% of the parameters are
+  trained and the maps barely change (mean absolute difference ≈ 0.003). The fine-tuned MSI-Net
+  weights are not used by any model yet.
+- **Centre bias**: DeepGaze IIE is used with a uniform centre bias, which disables its explicit
+  centre prior (see [Models](#models)).
+- **No GPU**: everything runs on CPU, and the deep models take seconds per image
+  (DeepGaze IIE ≈ 2.2 s per 800-px image).
+- **Itti-Koch** maps are coarse (computed at 1/16 of the input resolution), can show spurious high
+  values along the image borders, and depend on the input resolution (NSS +0.09 on average from
+  800 to 1200 px).
 - **Demo**: the maps are shown at the downscaled resolution (longer side 800 px). Only `*.jpeg`
-  files in `img/` are listed, and the gallery ordering assumes numeric file names. If
-  `deepgaze_finetuned.pt` is retrained, delete `.cache/saliency/` so the demo does not show the
-  old maps.
-- `requirements.txt` does not pin versions, and also lists `git+https://github.com/openai/CLIP.git`,
-  which no script uses at the moment.
+  files in `img/` are listed, and the gallery ordering assumes numeric file names. Deep maps are
+  cached in `.cache/saliency/` by image content only: delete that folder after changing a model
+  or retraining `deepgaze_finetuned.pt`, or the demo shows the old maps.
+- `requirements.txt` does not pin versions, does not list `pandas` (installed with Gradio), and
+  lists `git+https://github.com/openai/CLIP.git`, which no script uses.
