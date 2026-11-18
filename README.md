@@ -216,7 +216,7 @@ returned nearly the same map for every image (CC 0.998 between the maps of diffe
 **Fine-tuning DeepGaze IIE on OSIE.** DeepGaze IIE is an ensemble of 4 networks (different
 backbones). In each one we freeze the backbone, the saliency network and the finalizer, and
 train only `fixation_selection_networks` (≈311k parameters in total). The training set is the
-first 200 OSIE images, resized to 320×240. The target is the Gaussian heatmap of all the
+first 700 OSIE images, resized to 320×240. The target is the Gaussian heatmap of all the
 observers' fixations (σ = 0.05 × image width). The loss is the MSE between that heatmap and
 the predicted density, min-max normalised. Adam, lr 1e-5, batch 4, 5 epochs. Frozen BatchNorm
 layers are kept in eval mode. The mean training loss went from 0.02774 (epoch 1) to 0.02679
@@ -471,7 +471,7 @@ first use (DeepGaze IIE and its backbones into `~/.cache/torch/`, MSI-Net from K
 - **Box score**: the mean saliency inside the box. Other choices (max, sum, 90th percentile)
   change the results; the plain sum favours large boxes.
 - **AUC-Judd**: its chance level is about 0.60 with this number of clicks (see [Metrics](#metrics)).
-- **Fine-tuning**: small (200 images, 5 epochs, lr 1e-5, CPU), MSE loss instead of the
+- **Fine-tuning**: small (700 images, 5 epochs, lr 1e-5, CPU), MSE loss instead of the
   log-likelihood used to train DeepGaze, no validation split; only 0.30% of the parameters are
   trained and the maps barely change (mean absolute difference ≈ 0.003). The fine-tuned MSI-Net
   weights are not used by any model yet.
